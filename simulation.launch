@@ -1,0 +1,35 @@
+<launch>
+  <!-- Read arguments -->
+  <arg name="old_frame" default="DVLSensor"/>
+  <arg name="new_frame" default="world"/>
+  <arg name="input_topic" default="/g500/dvl"/>
+  <arg name="output_topic" default="/g500/velocity"/>
+
+
+  <include file="$(find underwater_vehicle_dynamics)/launch/dynamics.launch">
+  <arg name="namespace" value="g500" />
+  <arg name="params" value="$(find underwater_vehicle_dynamics)/config/dynamics_g500.yaml" />
+  </include>
+
+  <rosparam param="/g500/dynamics/external_force_topic">g500/ForceSensor</rosparam>
+
+  <arg name="scene" default="shaft2.xml" />
+  <node name="uwsim" pkg="uwsim" type="uwsim" args="--configfile $(arg scene)" output="screen" respawn="false" />
+  <arg name="thrusters_topic" default="/g500/thrusters_input" />
+  <!--<node name="keyboard_command" pkg="underwater_vehicle_dynamics" type="keyboard.py" args="$(arg thrusters_topic)" output="screen" respawn="false"/>-->
+
+
+
+
+  <node name="tflist"
+        pkg="rov_control_uwsim"
+        type="tflist.py"
+        output="screen"
+        respawn="true">
+    <!-- Set ROS parameters -->
+    <param name="old_frame" value="$(arg old_frame)"/>
+    <param name="new_frame" value="$(arg new_frame)"/>
+    <param name="input_topic" value="$(arg input_topic)"/>
+    <param name="output_topic" value="$(arg output_topic)"/>
+  </node>
+</launch>
