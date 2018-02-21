@@ -9,6 +9,7 @@ import rospy
 import tf
 import tf2_ros
 import geometry_msgs.msg
+import sensor_msgs.msg
 from sensor_msgs.msg import Imu
 import numpy as np
 import time
@@ -55,6 +56,8 @@ class Sensortf(object):
         self.rov_pose_pub = rospy.Publisher('/BlueRov2/pose',geometry_msgs.msg.Pose,queue_size=10)
 
         # initialize velocity array and spacing between velocities array
+        self.acc_x = []
+        self.mean_acc_x = []
         self.vel_x = []
         self.vel_rot_x = []
         self.x = []
@@ -62,6 +65,8 @@ class Sensortf(object):
         self.rot_x = []
         self.rot_x.append(0.0)
 
+        self.acc_y = []
+        self.mean_acc_y = []
         self.vel_y = []
         self.vel_rot_y = []
         self.y = []
@@ -69,6 +74,8 @@ class Sensortf(object):
         self.rot_y = []
         self.rot_y.append(0.0)
 
+        self.acc_z = []
+        self.mean_acc_z = []
         self.vel_z = []
         self.vel_rot_z = []
         self.z = []
@@ -101,25 +108,61 @@ class Sensortf(object):
         ## LINEAR COMPONENTS
 
         # Add linear velocities to the corresponding arrays
-        self.vel_x.append(data.linear_acceleration.x-0.08648)
-        self.vel_y.append(data.linear_acceleration.y-0.019508)
-        self.vel_z.append(data.linear_acceleration.z-9.8159)
+        self.acc_x.append(data.linear_acceleration.x-0.08648)
+        self.acc_y.append(data.linear_acceleration.y-0.019508)
+        self.acc_z.append(data.linear_acceleration.z-9.8159)
         self.t.append(rospy.get_time()) # in secs
 
-        # Integrate and obtain traslation
-        self.x.append(np.trapz(y = self.vel_x, x = self.t))
-        self.y.append(np.trapz(y = self.vel_y, x = self.t))
-        self.z.append(np.trapz(y = self.vel_z, x = self.t))
+        self.mean_acc_x.append(self.average_of_n(self.acc_x[len(self.acc_x)-1],
+                                                            self.mean_acc_x,
+                                                            5))
+        self.mean_acc_y.append(self.average_of_n(self.acc_y[len(self.acc_y)-1],
+                                                            self.mean_acc_y,
+                                                            5))
+        self.mean_acc_z.append(self.average_of_n(self.acc_z[len(self.acc_z)-1],
+                                                            self.mean_acc_z,
+                                                            5)+0.003145)
+  
+        avg_imu_pub = rospy.Publisher('/mavros/imu/avg',sensor_msgs.msg.Imu,queue_size=10)
+        avg_imu_msg = sensor_msgs.msg.Imu()
+        avg_imu_msg.linear_acceleration.x = self.mean_acc_x[len(self.mean_acc_x)-1]
+        avg_imu_msg.linear_acceleration.y = self.mean_acc_y[len(self.mean_acc_y)-1]
+        avg_imu_msg.linear_acceleration.z = self.mean_acc_z[len(self.mean_acc_z)-1]
 
-        # # Obtain relative traslation
-        dx = self.x[len(self.x)-1]-self.x[len(self.x)-2]
-        dy = self.y[len(self.y)-1]-self.y[len(self.y)-2]
-        dz = self.z[len(self.z)-1]-self.z[len(self.z)-2]
+        avg_imu_msg.header = data.header
+        avg_imu_msg.orientation = data.orientation
+        avg_imu_msg.angular_velocity = data.angular_velocity
+
+        avg_imu_pub.publish(avg_imu_msg)
+
+
+        # Integrate twice and obtain traslation
+
+        # Do it with last two values
+        dvx = [self.acc_x[len(self.acc_x)-1], self.acc_x[len(self.acc_x)-2]]
+        dvy = [self.acc_y[len(self.acc_y)-1], self.acc_y[len(self.acc_y)-2]]
+        dvz = [self.acc_z[len(self.acc_z)-1], self.acc_z[len(self.acc_z)-2]]
+        dt = [self.t[len(self.t)-1], self.t[len(self.t)-2]]
+
+        self.vel_x.append(np.trapz(y = dvx, x = dt))
+        self.vel_y.append(np.trapz(y = dvy, x = dt))
+        self.vel_z.append(np.trapz(y = dvz, x = dt))
+
+        # Do it with last two values
+        dx = [self.vel_x[len(self.vel_x)-1], self.vel_x[len(self.vel_x)-2]]
+        dy = [self.vel_y[len(self.vel_y)-1], self.vel_y[len(self.vel_y)-2]]
+        dz = [self.vel_z[len(self.vel_z)-1], self.vel_z[len(self.vel_z)-2]]
+        dt = [self.t[len(self.t)-1], self.t[len(self.t)-2]]
+
+        self.x.append(np.trapz(y = dx, x = self.t))
+        self.y.append(np.trapz(y = dy, x = self.t))
+        self.z.append(np.trapz(y = dz, x = self.t))
+
 
         # Add to transform values
-        self.transf.transform.translation.x = dx
-        self.transf.transform.translation.y = dy
-        self.transf.transform.translation.z = dz
+        self.transf.transform.translation.x = self.x[len(self.x)-1]
+        self.transf.transform.translation.y = self.y[len(self.y)-1]
+        self.transf.transform.translation.z = self.z[len(self.z)-1]
 
         ## ORIENTATION COMPONENTS
 
@@ -152,9 +195,22 @@ class Sensortf(object):
         self.rov_pose.orientation.w = data.orientation.w
         self.rov_pose_pub.publish(self.rov_pose)
 
-    def average_of_n(vector,n,self):
+    def average_of_n(self,last_value,vector,n):
         """ Takes the last n elements of a vector and computes the average """
+        avg_vector = []
+        # If the array is smaller than required, only mean of available values!
+        if len(vector) < n:
+            n = len(vector)
 
+        for i in range (n-1,0,-1):
+            avg_vector.append(vector[i])
+
+        # add last measurement
+        avg_vector.append(last_value)
+        
+        mean = np.mean(avg_vector)
+        return mean
+    
 
 
     def euler_to_quaternion(self, roll, pitch, yaw):
